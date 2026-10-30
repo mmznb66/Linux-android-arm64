@@ -1,4 +1,4 @@
-#pragma once
+#pragma limux-arm96
 
 #include <algorithm>
 #include <chrono>
@@ -22,7 +22,7 @@
 #include "font/oppo_font.h"
 
 // Vulkan 后端实现
-namespace RenderVK
+namespace linux-arm92
 {
     const int MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -38,6 +38,7 @@ namespace RenderVK
     static VkDescriptorPool g_DescriptorPool = VK_NULL_HANDLE;
 
     static VkFormat g_SwapchainFormat = VK_FORMAT_UNDEFINED;
+    static VkPresentModeKHR g_PresentMode = VK_PRESENT_MODE_FIFO_KHR;
     static VkExtent2D g_SwapchainExtent = {};
     static std::vector<VkImage> g_SwapchainImages;
     static std::vector<VkImageView> g_SwapchainImageViews;
@@ -163,7 +164,13 @@ namespace RenderVK
         else g_SwapchainExtent = {(uint32_t)displayInfo.width, (uint32_t)displayInfo.height};
         if (g_SwapchainExtent.width == 0 || g_SwapchainExtent.height == 0) return false;
 
+        const VkPresentModeKHR requestedPresentModes[] = {VK_PRESENT_MODE_FIFO_KHR};
+
+        //  const VkPresentModeKHR requestedPresentModes[] = {VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_FIFO_KHR};
+        g_PresentMode = ImGui_ImplVulkanH_SelectPresentMode(g_PhysicalDevice, g_Surface, requestedPresentModes, IM_ARRAYSIZE(requestedPresentModes));
+
         uint32_t imageCount = capabilities.minImageCount + 1;
+        if (g_PresentMode == VK_PRESENT_MODE_MAILBOX_KHR && imageCount < 3) imageCount = 3;
         if (capabilities.maxImageCount > 0 && imageCount > capabilities.maxImageCount) imageCount = capabilities.maxImageCount;
 
         VkSwapchainCreateInfoKHR createInfo{};
@@ -177,7 +184,7 @@ namespace RenderVK
         createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-        // 强制 Identity Transform，防止 Android 对正方形缓冲进行额外的错误拉伸
+        // 保持 Identity Transform，显示方向由系统显示投影处理。
         if (capabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) createInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
         else createInfo.preTransform = capabilities.currentTransform;
 
@@ -186,7 +193,7 @@ namespace RenderVK
         else if (capabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR) createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
         else if (capabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR) createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR;
         else return false;
-        createInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR; // Vsync
+        createInfo.presentMode = g_PresentMode;
         createInfo.clipped = VK_TRUE;
 
         // 传入旧交换链给 Android 底层，实现无缝过渡
@@ -287,6 +294,7 @@ namespace RenderVK
             CleanupSwapchain();
             return false;
         }
+        if (vulkan_backend_initialized) ImGui_ImplVulkan_SetMinImageCount(static_cast<uint32_t>(g_SwapchainImages.size()));
         return true;
     }
 
@@ -369,9 +377,7 @@ namespace RenderVK
         const int32_t sourceHeight = displayInfo.height;
         if (sourceWidth <= 0 || sourceHeight <= 0) return false;
 
-        if (s_recordSurface.mirrorReady && s_recordSurface.layerStack == target.layerStack &&
-            SameRecordDisplay(s_recordSurface.display, target) && s_recordSurface.source.orientation == displayInfo.orientation &&
-            s_recordSurface.source.width == sourceWidth && s_recordSurface.source.height == sourceHeight) return true;
+        if (s_recordSurface.mirrorReady && s_recordSurface.layerStack == target.layerStack && SameRecordDisplay(s_recordSurface.display, target) && s_recordSurface.source.orientation == displayInfo.orientation && s_recordSurface.source.width == sourceWidth && s_recordSurface.source.height == sourceHeight) return true;
 
         if (!s_recordSurface.mirrorReady || s_recordSurface.layerStack != target.layerStack)
         {
@@ -407,10 +413,13 @@ namespace RenderVK
         }
         UpdateScreenData(displayInfo.width, displayInfo.height, displayInfo.orientation);
 
-        int w = displayInfo.width;
-        int h = displayInfo.height;
-        int max_side = (h > w ? h : w);
-
+        // Lark SurfaceControl 只创建一次，旋转时由系统显示投影改变方向，不重建 layer。
+        // buffer 必须保持长边方形；不要在旋转时用 displayInfo.width/height 交换 ANativeWindow buffer，
+        // 因为 setBuffersGeometry 只改 buffer 像素尺寸，不改旧 layer 几何，SurfaceFlinger 会将画面拉伸。
+        // displayInfo.width/height 仍是实际屏幕逻辑尺寸，继续用于 ImGui、触摸和 ESP 坐标计算。
+        const int w = displayInfo.width;
+        const int h = displayInfo.height;
+        const int max_side = (h > w ? h : w);
         native_window = android::SurfaceControlManager::Create("Lark", max_side, max_side, !allowCapture);
         if (native_window == nullptr)
         {
@@ -648,7 +657,7 @@ namespace RenderVK
         }
         if (displayInfo.width <= 0 || displayInfo.height <= 0) return;
 
-        bool rotated = (orientation.load(std::memory_order_relaxed) != static_cast<uint32_t>(displayInfo.orientation));
+        const bool rotated = orientation.load(std::memory_order_relaxed) != static_cast<uint32_t>(displayInfo.orientation);
 
         if (g_SwapChainRebuild || rotated)
         {
@@ -816,6 +825,7 @@ namespace RenderVK
             native_window = nullptr;
         }
         g_PhysicalDevice = VK_NULL_HANDLE;
+        g_PresentMode = VK_PRESENT_MODE_FIFO_KHR;
         g_QueueFamily = (uint32_t)-1;
         g_Queue = VK_NULL_HANDLE;
         g_Swapchain = VK_NULL_HANDLE;

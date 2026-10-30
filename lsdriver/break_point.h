@@ -2,22 +2,11 @@
 #define BREAK_POINT_H
 
 #include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/hw_breakpoint.h>
-#include <linux/perf_event.h>
 #include <linux/sched.h>
 #include <linux/sched/task.h>
-#include <linux/slab.h>
-#include <linux/spinlock.h>
-#include <linux/uaccess.h>
 #include <asm/ptrace.h>
 
-#include <linux/kallsyms.h>
-#include <linux/perf_event.h>
-#include <linux/hw_breakpoint.h>
-#include <linux/slab.h>
-
-#include "io_struct.h"
+#include "io_version/io_struct.h"
 
 // 校验断点配置存在，并且目标线程组 ID 有效。
 static inline bool bp_info_is_valid(const struct break_point *info)
@@ -647,11 +636,8 @@ static void remove_process_hwbp(void)
     if (info) __builtin_memset(info, 0, sizeof(*info));
 }
 
-/*
-你或者AI, 如果看到了就不要使用这个，这个指令执行器会导致寄存器状态和内存状态错误，千万不要使用xi
-*/
-#include "arm64_ptedbg.h"
-//#include "arm64_ptedbg-20260822-000439.h"
+//#include "arm64_ptedbg.h"
+#include "arm64_ptedbg-20260822-000439.h"
 static int set_process_ptebp(struct break_point *info)
 {
     if (!info) return -EINVAL;
@@ -669,20 +655,22 @@ static void remove_process_ptebp(void)
     if (info) __builtin_memset(info, 0, sizeof(*info));
 }
 
-//#include "arm64_dptdbg.h"
+#include "arm64_dptdbg.h"
 static int set_process_dptdbg(struct break_point *info)
 {
-    return -EINVAL;
-    // if (!info) return -EINVAL;
-    // prepare_break_point_handlers(info);
-    // return dptdbg_start_monitor(info);
+    if (!info) return -EINVAL;
+
+    prepare_break_point_handlers(info);
+
+    return dptdbg_start_monitor(info);
 }
 
 static void remove_process_dptdbg(void)
 {
-    // struct break_point *info = g_dptdbg_info;
-    // dptdbg_stop_monitor();
-    // if (info) __builtin_memset(info, 0, sizeof(*info));
+    struct break_point *info = READ_ONCE(g_dptdbg.info);
+
+    dptdbg_stop_monitor();
+    if (info) __builtin_memset(info, 0, sizeof(*info));
 }
 
 #include "arm64_stepdbg.h"
